@@ -29,9 +29,9 @@
 
         /* ⚪ 初期状態 */
         .member-card {
-            background-color: #ffffff;
-            color: #333333;
-            border: 2px solid #ccc;
+            background-color: #ffffff !important;
+            color: #333333 !important;
+            border: 2px solid #ccc !important;
             padding: 10px;
             font-size: 18px;
             font-weight: bold;
@@ -46,6 +46,8 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            opacity: 1 !important;
+            transform: scale(1) !important;
         }
 
         /* 🔴 90以上（遠い）、または途絶・離脱 */
@@ -53,9 +55,6 @@
             background-color: #dc3545 !important;
             color: white !important;
             border-color: #dc3545 !important;
-            opacity: 1 !important;
-            transform: scale(1) !important;
-            pointer-events: auto !important;
         }
 
         /* 🟢 90未満（近い：確認済） */
@@ -63,15 +62,14 @@
             background-color: #28a745 !important;
             color: white !important;
             border-color: #28a745 !important;
-            opacity: 1 !important;
-            transform: scale(1) !important;
         }
 
         /* 💨 非表示アニメーション */
         .member-card.fade-out {
-            opacity: 0;
-            transform: scale(0.8);
-            pointer-events: none;
+            opacity: 0 !important;
+            transform: scale(0.8) !important;
+            pointer-events: none !important;
+            display: none !important; /* 画面から完全に消し去る */
         }
 
         /* 🎉 全員集合 */
@@ -141,7 +139,6 @@
         // 🟢 同じフォルダにある tag_master.txt を自動で読み込む関数
         async function loadTagMasterAutomatic() {
             try {
-                // 同じフォルダのファイルを直接読みにいく
                 const response = await fetch('tag_master.txt');
                 if (!response.ok) throw new Error();
                 const text = await response.text();
@@ -167,18 +164,36 @@
                 completionMsg.style.display = "none"; gridDiv.style.display = "grid";
                 statusDiv.innerText = "状態: マスター読込成功。次にログファイルを指定してください。";
                 statusDiv.style.color = "blue";
-                console.log("自動読込成功:", tagMasterMap);
 
             } catch (e) { 
-                statusDiv.innerText = "🚨 エラー: tag_master.txt の自動読込に失敗しました。HTMLと同じ場所にファイルがあるか確認してください。"; 
-                statusDiv.style.color = "red";
+                console.log("tag_master.txt の読込に失敗したため内蔵データを使用します。");
+                tagMasterMap.clear(); lastSeenMap.clear(); fadingMembers.clear();
+                gridDiv.innerHTML = "";
+
+                const defaultMembers = [
+                    { id: "A6A00B16", name: "鈴木 太郎" },
+                    { id: "A6A00B75", name: "佐藤 次郎" },
+                    { id: "A6A00B63", name: "田中 三郎" }
+                ];
+
+                for (let member of defaultMembers) {
+                    const tagId = member.id.toUpperCase();
+                    tagMasterMap.set(tagId, member.name);
+                    const card = document.createElement('div');
+                    card.className = 'member-card';
+                    card.id = `card-${tagId}`; card.innerText = member.name;
+                    gridDiv.appendChild(card);
+                }
+                completionMsg.style.display = "none"; gridDiv.style.display = "grid";
+                statusDiv.innerText = "状態: 内蔵マスターを読み込みました。次にログファイルを指定してください。"; 
+                statusDiv.style.color = "purple";
             }
         }
 
         fileBtn.addEventListener('click', async () => {
             try {
                 fileHandle = await window.showSaveFilePicker({
-                    suggestedName: 'tag_Log.txt',
+                    suggestName: 'tag_Log.txt',
                     types: [{ description: 'Text Files', accept: { 'text/plain': ['.txt'] } }],
                 });
                 statusDiv.innerText = "状態: ログファイル準備完了。シリアル接続してください。";
@@ -238,16 +253,13 @@
         function onPacketReceived() {
             const decoder = new TextDecoder("utf-8");
             const cleanData = decoder.decode(glo_byRecvBuf.subarray(1, glo_nRecvLen - 1));
-            console.log("届いた生パケット:", cleanData);
             recvDataAnalyze(cleanData); 
             glo_nRecvLen = 0; 
         }
 
         function recvDataAnalyze(strBase) {
             let parts = strBase.split(",");
-            for (let k = 0; k < parts.length; k++) {
-                parts[k] = parts[k].trim();
-            }
+            for (let k = 0; k < parts.length; k++) { parts[k] = parts[k].trim(); }
             
             for (let i = 0; i < parts.length; i += 4) {
                 if (i + 3 < parts.length) {
@@ -271,12 +283,9 @@
                         if (hexMetrics && hexMetrics.length >= 6) nVibration = parseInt(hexMetrics.substring(4, 6), 16);
 
                         if (dbTagID.length > 0) {
-                            console.log(`★照合成功 ID: [${dbTagID}] , 変換RSSI: -${nRssi}dBm`);
                             onDataWrite(dbTagID, dbStationID, nBattery, nTemperature, nVibration, nRssi);
                         }
-                    } catch (err) {
-                        console.error("パケット解析中にエラーが発生しました:", err);
-                    }
+                    } catch (err) { console.error(err); }
                 }
             }
         }
@@ -290,32 +299,35 @@
                 const userName = tagMasterMap.get(targetTagId);
                 const targetCard = document.getElementById(`card-${targetTagId}`);
 
+                // 🔴 ガード：すでに緑で消えかかっている(30秒カウント中)なら一切無視
+                if (fadingMembers.has(targetTagId)) { return; }
+
                 lastSeenMap.set(targetTagId, nowMs);
 
-                if (fadingMembers.has(targetTagId)) {
-                    return; 
-                }
-
+                // まだ確認済（緑）になっていない場合
                 if (!checkedMembers.has(targetTagId)) {
+                    // 初めて受信、または途絶から復活した場合は赤にする
                     if (!receivedMembers.has(targetTagId)) {
                         receivedMembers.add(targetTagId);
                         if (targetCard) {
-                            targetCard.classList.add('received'); 
+                            targetCard.style.display = "flex"; // 強制表示
+                            targetCard.className = 'member-card received'; 
                         }
                     }
 
-                    // 電波判定（255未満＝実機パケットが届いたら100%緑にするテスト設定）
+                    // 電波判定（実機パケットが届いたら緑にして30秒後に消す）
                     if (rssi < 255) { 
                         checkedMembers.add(targetTagId); 
                         fadingMembers.add(targetTagId); 
                         
                         if (targetCard) {
-                            targetCard.classList.remove('received');
-                            targetCard.classList.add('checked'); 
+                            targetCard.style.display = "flex"; // 強制表示
+                            targetCard.className = 'member-card checked'; 
                             
+                            // 30秒後に消すタイマー
                             setTimeout(() => {
                                 if (checkedMembers.has(targetTagId)) {
-                                    targetCard.classList.add('fade-out');
+                                    targetCard.className = 'member-card fade-out'; // ここで初めて display: none になる
                                     fadingMembers.delete(targetTagId); 
                                     checkAllCompletion(); 
                                 }
@@ -323,12 +335,14 @@
                         }
                     }
                 } 
+                // 既に緑（確認済）だったが、電波が極端に弱くなった（離脱した）場合の処理
                 else {
                     if (rssi >= 90) { 
                         checkedMembers.delete(targetTagId); 
+                        fadingMembers.delete(targetTagId);
                         if (targetCard) {
-                            targetCard.classList.remove('checked', 'fade-out');
-                            targetCard.classList.add('received'); 
+                            targetCard.style.display = "flex"; // 強制表示
+                            targetCard.className = 'member-card received'; // 赤に戻す
                             completionMsg.style.display = "none";
                             gridDiv.style.display = "grid";
                         }
@@ -349,6 +363,7 @@
             }
         }
 
+        // ⏱️ 途絶監視タイマー
         function startLostCheckTimer() {
             if (lostCheckTimer) clearInterval(lostCheckTimer);
             lostCheckTimer = setInterval(() => {
@@ -356,19 +371,23 @@
                 const threeMinutesMs = 3 * 60 * 1000; 
 
                 for (let [tagId, name] of tagMasterMap) {
-                    if (fadingMembers.has(tagId)) continue;
+                    if (fadingMembers.has(tagId)) continue; 
+
                     if (lastSeenMap.has(tagId)) {
                         const lastSeenTime = lastSeenMap.get(tagId);
+                        
+                        // 3分以上電波が途絶えたら
                         if (nowMs - lastSeenTime > threeMinutesMs) {
-                            if (checkedMembers.has(tagId) || !gridDiv.querySelector(`#card-${tagId}`).classList.contains('received')) {
-                                checkedMembers.delete(tagId); 
-                                const targetCard = document.getElementById(`card-${tagId}`);
-                                if (targetCard) {
-                                    targetCard.classList.remove('checked', 'fade-out');
-                                    targetCard.classList.add('received'); 
-                                    completionMsg.style.display = "none";
-                                    gridDiv.style.display = "grid";
-                                }
+                            const targetCard = document.getElementById(`card-${tagId}`);
+                            
+                            // もし「赤（received）」の状態だったら、初期状態（白）に戻す
+                            if (targetCard && targetCard.classList.contains('received')) {
+                                receivedMembers.delete(tagId);
+                                lastSeenMap.delete(tagId);
+                                
+                                // JavaScriptから直接強制表示を指示して、白い通常カードに戻す
+                                targetCard.style.display = "flex"; 
+                                targetCard.className = 'member-card'; 
                             }
                         }
                     }
@@ -377,7 +396,12 @@
         }
 
         function checkAllCompletion() {
-            if (checkedMembers.size === tagMasterMap.size) {
+            let fadeOutCount = 0;
+            tagMasterMap.forEach((name, tagId) => {
+                const card = document.getElementById(`card-${tagId}`);
+                if (card && card.classList.contains('fade-out')) { fadeOutCount++; }
+            });
+            if (fadeOutCount === tagMasterMap.size) {
                 gridDiv.style.display = "none";
                 completionMsg.style.display = "block";
             }
@@ -409,5 +433,4 @@
     </script>
 </body>
 </html>
-
 
